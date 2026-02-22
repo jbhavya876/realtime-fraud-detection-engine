@@ -1,0 +1,11 @@
+confluent-kafka
+redis
+pandas
+numpy
+xgboost==1.7.6
+shap
+fastapi
+uvicorn
+requests
+prometheus-client
+scikit-learn

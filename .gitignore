@@ -2,15 +2,40 @@
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.so
 
 # ML artifacts
 fraud_model.pkl
 shap_explainer.pkl
 
+# Env files
+.env
+.env.*
+.envrc
+
 # OS / Editor
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
+*.swp
 
 # Logs
 *.log
+
+# Docker
+*.tar
+docker-compose.override.yml
+
+# Redis
+dump.rdb
+*.rdb
+
+# Monitoring volumes
+prometheus_data/
+grafana_data/
+
+# Jupyter
+.ipynb_checkpoints/

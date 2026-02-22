@@ -1,3 +1,4 @@
+import os
 import json
 import random
 import time
@@ -6,13 +7,17 @@ import redis
 from datetime import datetime
 from confluent_kafka import Producer
 
-# --- Configuration ---
-KAFKA_TOPIC = "raw-transactions"
-KAFKA_BOOTSTRAP_SERVERS = "localhost:19092"
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
-TRANSACTIONS_PER_SECOND = 5
-FRAUD_PROBABILITY = 0.05
+# --- Configuration with Env Var Fallbacks ---
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BROKER", "localhost:19092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw-transactions")
+
+IN_TOPIC = KAFKA_TOPIC
+
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+
+FRAUD_PROBABILITY = float(os.getenv("FRAUD_PROBABILITY", 0.05))
+TRANSACTIONS_PER_SECOND = float(os.getenv("TRANSACTIONS_PER_SECOND", 5.0))
 
 # Connect to Services
 producer = Producer({'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS})

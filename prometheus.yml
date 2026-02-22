@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s # Scrape metrics every 5 seconds
+
+scrape_configs:
+  - job_name: 'fraud_detector'
+    static_configs:
+      - targets: ['detector:8001'] # Direct service-to-service communication

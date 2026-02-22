@@ -1,16 +1,30 @@
+import os
 import json
 import redis
 import time
 from datetime import datetime
 from confluent_kafka import Consumer, Producer
 import requests
+from prometheus_client import start_http_server, Counter, Histogram
 
-# --- Configuration ---
-KAFKA_BOOTSTRAP_SERVERS = "localhost:19092"
-IN_TOPIC = "raw-transactions"
-OUT_TOPIC = "evaluated-transactions"
-REDIS_HOST = "localhost"
-REDIS_PORT = 6379
+# --- Configuration with Env Var Fallbacks ---
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BROKER", "localhost:19092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw-transactions")
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8000/predict") 
+
+# --- Prometheus Metrics Setup ---
+# Counter for total transactions processed
+TX_PROCESSED = Counter('transactions_processed_total', 'Total transactions processed')
+# Counter for fraud caught
+FRAUD_CAUGHT = Counter('fraud_caught_total', 'Total fraudulent transactions caught')
+# Histogram to track processing latency
+PROCESSING_TIME = Histogram('transaction_processing_seconds', 'Time spent processing a transaction')
+
+# Start the metrics server on port 8001
+start_http_server(8001)
+print("Prometheus metrics server started on port 8001")
 
 # Set up Redis
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
@@ -36,6 +50,9 @@ def parse_time(iso_str):
 def process_transaction(tx):
     start_time = time.time() # Latency tracking start
     
+    # Increment total processed counter
+    TX_PROCESSED.inc()
+
     user_id = tx['user_id']
     amount = tx['amount']
     tx_time = parse_time(tx['timestamp'])
@@ -116,10 +133,12 @@ def process_transaction(tx):
     
     latency_ms = (time.time() - start_time) * 1000 # Latency tracking end
     
+    # Increment fraud counter if caught
     if is_fraud:
-        print(f"🚨 FRAUD CAUGHT: {user_id} | ${amount} | Latency: {latency_ms:.2f}ms | Reasons: {reasons}")
+        FRAUD_CAUGHT.inc()
+        print(f"🚨 FRAUD CAUGHT: {user_id} | ${amount} | Reasons: {reasons}")
     else:
-        print(f"✅ Cleared: {user_id} | ${amount} | Latency: {latency_ms:.2f}ms")
+        print(f"✅ Cleared: {user_id} | ${amount}")
         
     # Critical Improvement: Key-based routing for partitions
     producer.produce(
@@ -129,6 +148,9 @@ def process_transaction(tx):
         callback=delivery_report
     )
     producer.poll(0)
+
+    latency = time.time() - start_time
+    PROCESSING_TIME.observe(latency)
 
 print("Starting Hardened Real-Time Fraud Detector...")
 try:
