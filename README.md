@@ -1,6 +1,26 @@
 # ⚡ Real-Time Fraud Detection Engine
 
-A production-grade, stream-processing fraud detection system built with **Kafka (Redpanda)**, **Redis**, **XGBoost**, and **FastAPI** — containerised end-to-end with Docker Compose and observable via **Prometheus + Grafana**.
+> A production-grade, stream-processing fraud detection system — containerised end-to-end and observable in real time.
+
+Built with **Kafka (Redpanda)**, **Redis**, **XGBoost + SHAP**, **FastAPI**, **Prometheus**, and **Grafana**.
+
+---
+
+## 🖼️ Live System Snapshots
+
+### Grafana — Real-Time Metrics Dashboard
+
+![Grafana Dashboard — Transactions Per Second & Fraud Detection Rate](screenshots/grafana_dashboard.png)
+
+_Transactions flowing at ~5.2 TPS with a live fraud detection rate tracked per second._
+
+---
+
+### Docker — All Services Running
+
+![Docker — All 7 Services Healthy](screenshots/docker_services.png)
+
+_All 7 containers running in sync. The detector and ML service communicate on every transaction._
 
 ---
 
@@ -52,7 +72,7 @@ The detector applies a **layered defence** strategy per transaction:
    - 🚀 **Velocity Anomaly** — flags 5+ transactions within 60 seconds
    - 🌍 **Location Anomaly** — flags transactions outside the user's home region
 
-2. **ML Inference** (XGBoost via HTTP, 100 ms timeout)
+2. **ML Inference** (XGBoost via HTTP, 500 ms timeout)
    - Features: `amount`, `user_avg_amount`, `amount_ratio`, `location_mismatch`, `is_international`
    - Threshold: fraud probability > **80%**
    - **SHAP values** generate human-readable explanations for every positive prediction
@@ -66,7 +86,7 @@ The detector applies a **layered defence** strategy per transaction:
 ### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) & Docker Compose
-- Python 3.9+ (for local runs / model training)
+- Python 3.9+ (only for local runs / model retraining)
 
 ### 1 — Clone & spin up infrastructure
 
@@ -80,24 +100,26 @@ This starts Redpanda, Redis, Prometheus, and Grafana automatically.
 
 ### 2 — Seed user profiles into Redis
 
+> **⚠️ Important:** If you have a local Redis instance running on port 6379, the `setup_redis.py` script will hit it instead of the Docker Redis container. Use the command below to seed directly into the correct container.
+
 ```bash
-pip install -r requirements.txt
-python setup_redis.py
+# Recommended — seeds directly into the Docker Redis container (works regardless of local Redis)
+bash -c '
+LOCATIONS=("NY" "CA" "TX" "FL" "IL")
+{ echo "FLUSHALL"
+  for i in $(seq -w 0 49); do
+    LOC="${LOCATIONS[$((RANDOM % 5))]}"
+    AVG=$(awk "BEGIN{printf \"%.2f\", 10 + rand() * 140}")
+    STD=$(awk "BEGIN{printf \"%.2f\", 2 + rand() * 13}")
+    echo "SET user_profile:usr_${i} {\"user_id\":\"usr_${i}\",\"base_location\":\"${LOC}\",\"avg_transaction_amount\":${AVG},\"std_dev_amount\":${STD}}"
+  done
+} | docker exec -i redis redis-cli --pipe
+'
 ```
 
 Creates 50 synthetic user profiles, each with a home location, average spend, and spend volatility.
 
-### 3 — Train the ML model
-
-```bash
-python train_model.py
-```
-
-Generates ~10 000 labelled transactions, trains an XGBoost classifier, fits a SHAP TreeExplainer, and saves both as pickle artifacts (`fraud_model.pkl`, `shap_explainer.pkl`).
-
-> **Pre-trained artifacts** (`fraud_model.pkl` and `shap_explainer.pkl`) are already committed. Skip this step if you just want to run the engine.
-
-### 4 — Start the application stack
+### 3 — Start the application stack
 
 ```bash
 docker compose up --build
@@ -116,6 +138,16 @@ python detector.py
 python generator.py
 ```
 
+### 4 — Train the ML model (optional)
+
+```bash
+python train_model.py
+```
+
+Generates ~10,000 labelled transactions, trains an XGBoost classifier, fits a SHAP TreeExplainer, and saves both as pickle artifacts (`fraud_model.pkl`, `shap_explainer.pkl`).
+
+> **Pre-trained artifacts** are already committed — skip this step if you just want to run the engine.
+
 ---
 
 ## 🗂️ Project Structure
@@ -133,7 +165,10 @@ realtime-fraud-engine/
 ├── requirements.txt    # Python dependencies
 ├── Dockerfile          # Single image for all Python services
 ├── docker-compose.yml  # Full stack orchestration
-└── prometheus.yml      # Prometheus scrape config
+├── prometheus.yml      # Prometheus scrape config
+└── screenshots/        # Live system snapshots
+    ├── grafana_dashboard.png
+    └── docker_services.png
 ```
 
 ---
@@ -146,6 +181,7 @@ All services read configuration from environment variables with sensible default
 | ------------------------- | ------------------------------- | ---------------------------------- |
 | `KAFKA_BROKER`            | `localhost:19092`               | Kafka / Redpanda bootstrap servers |
 | `KAFKA_TOPIC`             | `raw-transactions`              | Input topic name                   |
+| `OUT_TOPIC`               | `processed-transactions`        | Output topic for verdicts          |
 | `REDIS_HOST`              | `localhost`                     | Redis hostname                     |
 | `REDIS_PORT`              | `6379`                          | Redis port                         |
 | `ML_SERVICE_URL`          | `http://localhost:8000/predict` | ML inference endpoint              |
@@ -166,15 +202,16 @@ The detector exposes a **Prometheus metrics endpoint** on port `8001`:
 | `fraud_caught_total`             | Counter   | Total transactions flagged as fraud |
 | `transaction_processing_seconds` | Histogram | Per-transaction processing latency  |
 
-### Access dashboards
+### Access Dashboards
 
 | Tool        | URL                                                                       |
 | ----------- | ------------------------------------------------------------------------- |
 | Prometheus  | [http://localhost:9090](http://localhost:9090)                            |
 | Grafana     | [http://localhost:3000](http://localhost:3000) (default: `admin`/`admin`) |
 | ML API docs | [http://localhost:8000/docs](http://localhost:8000/docs)                  |
+| Raw Metrics | [http://localhost:8001/metrics](http://localhost:8001/metrics)            |
 
-To visualise fraud metrics in Grafana, add Prometheus as a data source (`http://prometheus:9090`) and build a dashboard using the metrics above.
+To visualise fraud metrics in Grafana, add Prometheus as a data source (`http://prometheus:9090`) and create panels using the metrics above.
 
 ---
 
@@ -191,14 +228,21 @@ To visualise fraud metrics in Grafana, add Prometheus as a data source (`http://
   "is_international": 0
 }
 
-// Response
+// Response — Fraud detected
 {
-  "fraud_probability": 0.9732,
+  "fraud_probability": 0.9995,
   "is_fraud": true,
   "explanation": [
-    "Transaction amount is unusually high compared to user history.",
-    "Transaction location does not match user's typical region."
+    "Transaction location does not match user's typical region.",
+    "Transaction amount is unusually high compared to user history."
   ]
+}
+
+// Response — Normal transaction
+{
+  "fraud_probability": 0.0315,
+  "is_fraud": false,
+  "explanation": []
 }
 ```
 
