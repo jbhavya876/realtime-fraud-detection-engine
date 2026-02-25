@@ -10,9 +10,11 @@ from prometheus_client import start_http_server, Counter, Histogram
 # --- Configuration with Env Var Fallbacks ---
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BROKER", "localhost:19092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw-transactions")
+IN_TOPIC = KAFKA_TOPIC
+OUT_TOPIC = os.getenv("OUT_TOPIC", "processed-transactions")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8000/predict") 
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://localhost:8000/predict")
 
 # --- Prometheus Metrics Setup ---
 # Counter for total transactions processed
@@ -111,7 +113,7 @@ def process_transaction(tx):
 
     try:
         # We use a short timeout. In real-time systems, it's better to fail fast than hang.
-        response = requests.post("http://localhost:8000/predict", json=payload, timeout=0.1)
+        response = requests.post(ML_SERVICE_URL, json=payload, timeout=0.5)
         if response.status_code == 200:
             ml_result = response.json()
             is_fraud = ml_result['is_fraud']
