@@ -78,3 +78,14 @@ services:
       - "3000:3000"
     depends_on:
       - prometheus
+
+  frontend:
+    build: .
+    container_name: streamlit-frontend
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    depends_on:
+      - ml-service
+    environment:
+      - ML_SERVICE_URL_BATCH=http://ml-service:8000/batch-analyze

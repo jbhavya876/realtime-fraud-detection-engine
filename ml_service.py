@@ -1,3 +1,7 @@
+import os
+import io
+import redis
+from fastapi import UploadFile, File, HTTPException
 from fastapi import FastAPI
 from pydantic import BaseModel
 import pickle
@@ -6,6 +10,9 @@ import numpy as np
 import shap
 
 app = FastAPI(title="Fraud Inference Engine")
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 # Load our pre-trained artifacts on startup
 print("Loading Model and Explainer...")
@@ -78,5 +85,91 @@ def predict_fraud(features: TransactionFeatures):
         "is_fraud": is_fraud,
         "explanation": reasons
     }
+
+@app.post("/batch-analyze")
+async def analyze_csv(file: UploadFile = File(...)):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+    
+    # Read the uploaded CSV into a Pandas DataFrame
+    contents = await file.read()
+    try:
+        raw_df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
+    except Exception as e:
+         raise HTTPException(status_code=400, detail=f"Error reading CSV: {str(e)}")
+    
+    # Required columns for our pipeline
+    required_cols = ['transaction_id', 'user_id', 'amount', 'location']
+    if not all(col in raw_df.columns for col in required_cols):
+        raise HTTPException(status_code=400, detail=f"CSV must contain columns: {required_cols}")
+
+    results = []
+    
+    # Process each row
+    for index, row in raw_df.iterrows():
+        user_id = row['user_id']
+        amount = float(row['amount'])
+        location = row['location']
+        
+        # 1. Fetch User Profile from Redis (Just like the detector does)
+        profile_json = r.get(f"user_profile:{user_id}")
+        if not profile_json:
+            # Fallback for unknown users in the CSV
+            avg_amount = 50.0 
+            base_location = location
+        else:
+            import json
+            profile = json.loads(profile_json)
+            avg_amount = profile['avg_transaction_amount']
+            base_location = profile['base_location']
+            
+        # 2. Engineer Features
+        location_mismatch = 1 if location != base_location and location not in ['INTERNATIONAL', 'ONLINE'] else 0
+        is_international = 1 if location == 'INTERNATIONAL' else 0
+        amount_ratio = amount / avg_amount if avg_amount > 0 else 1.0
+        
+        feature_dict = {
+            'amount': amount,
+            'user_avg_amount': avg_amount,
+            'amount_ratio': amount_ratio,
+            'location_mismatch': location_mismatch,
+            'is_international': is_international
+        }
+        
+        feature_df = pd.DataFrame([feature_dict])
+        
+        # 3. Predict
+        fraud_prob = float(model.predict_proba(feature_df)[0][1])
+        is_fraud = bool(fraud_prob > 0.80)
+        
+        reasons = []
+        if is_fraud:
+            # Calculate SHAP values
+            shap_values = explainer.shap_values(feature_df)
+            vals = shap_values[1][0] if isinstance(shap_values, list) else shap_values[0]
+            
+            contributions = list(zip(feature_df.columns, vals))
+            contributions.sort(key=lambda x: x[1], reverse=True)
+            
+            for feat, val in contributions[:2]:
+                if val > 0.5:
+                    if feat == 'amount_ratio': reasons.append("Amount unusually high vs history.")
+                    elif feat == 'location_mismatch': reasons.append("Location mismatch.")
+                    elif feat == 'is_international': reasons.append("International tx flagged.")
+                    elif feat == 'amount': reasons.append("Absolute amount is suspicious.")
+            if not reasons: reasons.append("Complex anomaly detected.")
+
+        # Append to results
+        results.append({
+            "transaction_id": row['transaction_id'],
+            "user_id": user_id,
+            "amount": amount,
+            "location": location,
+            "is_fraud": is_fraud,
+            "fraud_probability": round(fraud_prob, 4),
+            "reasons": ", ".join(reasons) if reasons else "None"
+        })
+
+    return {"analyzed_transactions": results}
 
 # Run this via terminal: uvicorn ml_service:app --reload --port 8000

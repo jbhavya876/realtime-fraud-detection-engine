@@ -9,3 +9,5 @@ uvicorn
 requests
 prometheus-client
 scikit-learn
+python-multipart
+streamlit

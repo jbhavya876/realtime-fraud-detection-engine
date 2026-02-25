@@ -2,7 +2,7 @@
 
 > A production-grade, stream-processing fraud detection system — containerised end-to-end and observable in real time.
 
-Built with **Kafka (Redpanda)**, **Redis**, **XGBoost + SHAP**, **FastAPI**, **Prometheus**, and **Grafana**.
+Built with **Kafka (Redpanda)**, **Redis**, **XGBoost + SHAP**, **FastAPI**, **Streamlit**, **Prometheus**, and **Grafana**.
 
 ---
 
@@ -18,9 +18,9 @@ _Transactions flowing at ~5.2 TPS with a live fraud detection rate tracked per s
 
 ### Docker — All Services Running
 
-![Docker — All 7 Services Healthy](screenshots/docker_services.png)
+![Docker — All 8 Services Healthy](screenshots/docker_services.png)
 
-_All 7 containers running in sync. The detector and ML service communicate on every transaction._
+_All 8 containers running in sync. The detector and ML service communicate on every transaction._
 
 ---
 
@@ -35,31 +35,33 @@ _All 7 containers running in sync. The detector and ML service communicate on ev
 │ w/ fraud        │                         │  • Location mismatch │
 │ injection       │                         │  • ML inference call │
 └─────────────────┘                         └────────┬─────────────┘
-                                                     │ HTTP POST
+                                                     │ HTTP POST /predict
                                           ┌──────────▼──────────┐
         ┌──────────────────────┐          │    ml_service.py     │
         │       Redis          │◀────────▶│                      │
         │  User profiles &     │          │  XGBoost classifier  │
         │  TX velocity state   │          │  + SHAP explainability│
-        └──────────────────────┘          └─────────────────────┘
-                                                     │
-                                          ┌──────────▼──────────┐
-                                          │  Prometheus + Grafana│
-                                          │  (metrics on :8001)  │
-                                          └─────────────────────┘
+        └──────────────────────┘          └──────┬────────┬──────┘
+                                                 │        │ HTTP POST /batch-analyze
+                                    ┌────────────▼─┐  ┌───▼──────────────┐
+                                    │  Prometheus  │  │    app.py        │
+                                    │  + Grafana   │  │  Streamlit UI    │
+                                    │  (:8001 src) │  │  FraudOps Portal │
+                                    └──────────────┘  └──────────────────┘
 ```
 
 ### Services at a Glance
 
-| Service        | File / Image            | Port             | Role                                         |
-| -------------- | ----------------------- | ---------------- | -------------------------------------------- |
-| **Generator**  | `generator.py`          | —                | Produces synthetic transactions to Kafka     |
-| **Detector**   | `detector.py`           | `8001` (metrics) | Consumes, applies rules + ML, emits verdicts |
-| **ML Service** | `ml_service.py`         | `8000`           | XGBoost inference + SHAP explanations        |
-| **Redpanda**   | `redpandadata/redpanda` | `19092`          | Kafka-compatible message broker              |
-| **Redis**      | `redis:alpine`          | `6379`           | User profiles + velocity state store         |
-| **Prometheus** | `prom/prometheus`       | `9090`           | Metrics scraper                              |
-| **Grafana**    | `grafana/grafana`       | `3000`           | Dashboards                                   |
+| Service        | File / Image            | Port             | Role                                          |
+| -------------- | ----------------------- | ---------------- | --------------------------------------------- |
+| **Generator**  | `generator.py`          | —                | Produces synthetic transactions to Kafka      |
+| **Detector**   | `detector.py`           | `8001` (metrics) | Consumes, applies rules + ML, emits verdicts  |
+| **ML Service** | `ml_service.py`         | `8000`           | XGBoost inference + SHAP explanations         |
+| **Frontend**   | `app.py`                | `8501`           | Streamlit FraudOps Portal (live view + batch) |
+| **Redpanda**   | `redpandadata/redpanda` | `19092`          | Kafka-compatible message broker               |
+| **Redis**      | `redis:alpine`          | `6379`           | User profiles + velocity state store          |
+| **Prometheus** | `prom/prometheus`       | `9090`           | Metrics scraper                               |
+| **Grafana**    | `grafana/grafana`       | `3000`           | Dashboards                                    |
 
 ---
 
@@ -96,7 +98,7 @@ cd realtime-fraud-engine
 docker compose up -d
 ```
 
-This starts Redpanda, Redis, Prometheus, and Grafana automatically.
+This starts Redpanda, Redis, Prometheus, Grafana, the ML service, detector, generator, and the Streamlit frontend automatically.
 
 ### 2 — Seed user profiles into Redis
 
@@ -136,6 +138,9 @@ python detector.py
 
 # Terminal 3 — Transaction generator
 python generator.py
+
+# Terminal 4 — Streamlit FraudOps Portal
+streamlit run app.py --server.port 8501
 ```
 
 ### 4 — Train the ML model (optional)
@@ -156,15 +161,17 @@ Generates ~10,000 labelled transactions, trains an XGBoost classifier, fits a SH
 realtime-fraud-engine/
 ├── generator.py        # Synthetic transaction producer (Kafka)
 ├── detector.py         # Core stream processor & fraud logic
-├── ml_service.py       # FastAPI ML inference endpoint
+├── ml_service.py       # FastAPI ML inference endpoint (/predict & /batch-analyze)
+├── app.py              # Streamlit FraudOps Portal (live monitoring + batch analysis)
 ├── train_model.py      # XGBoost + SHAP model training script
 ├── setup_redis.py      # Seeds user profiles into Redis
 ├── consumer.py         # Lightweight debug consumer (print-only)
+├── test_batch.csv      # Sample CSV for batch analysis testing
 ├── fraud_model.pkl     # Pre-trained XGBoost model artifact
 ├── shap_explainer.pkl  # Pre-trained SHAP TreeExplainer artifact
 ├── requirements.txt    # Python dependencies
 ├── Dockerfile          # Single image for all Python services
-├── docker-compose.yml  # Full stack orchestration
+├── docker-compose.yml  # Full stack orchestration (8 services)
 ├── prometheus.yml      # Prometheus scrape config
 └── screenshots/        # Live system snapshots
     ├── grafana_dashboard.png
@@ -177,16 +184,18 @@ realtime-fraud-engine/
 
 All services read configuration from environment variables with sensible defaults:
 
-| Variable                  | Default                         | Description                        |
-| ------------------------- | ------------------------------- | ---------------------------------- |
-| `KAFKA_BROKER`            | `localhost:19092`               | Kafka / Redpanda bootstrap servers |
-| `KAFKA_TOPIC`             | `raw-transactions`              | Input topic name                   |
-| `OUT_TOPIC`               | `processed-transactions`        | Output topic for verdicts          |
-| `REDIS_HOST`              | `localhost`                     | Redis hostname                     |
-| `REDIS_PORT`              | `6379`                          | Redis port                         |
-| `ML_SERVICE_URL`          | `http://localhost:8000/predict` | ML inference endpoint              |
-| `FRAUD_PROBABILITY`       | `0.05`                          | Fraction of injected fraud events  |
-| `TRANSACTIONS_PER_SECOND` | `5.0`                           | Generator throughput rate          |
+| Variable                  | Default                               | Description                          |
+| ------------------------- | ------------------------------------- | ------------------------------------ |
+| `KAFKA_BROKER`            | `localhost:19092`                     | Kafka / Redpanda bootstrap servers   |
+| `KAFKA_TOPIC`             | `raw-transactions`                    | Input topic name                     |
+| `OUT_TOPIC`               | `processed-transactions`              | Output topic for verdicts            |
+| `REDIS_HOST`              | `localhost`                           | Redis hostname                       |
+| `REDIS_PORT`              | `6379`                                | Redis port                           |
+| `ML_SERVICE_URL`          | `http://localhost:8000/predict`       | ML inference endpoint (streaming)    |
+| `ML_SERVICE_URL_BATCH`    | `http://localhost:8000/batch-analyze` | ML batch analysis endpoint           |
+| `PROMETHEUS_URL`          | `http://localhost:9090`               | Prometheus base URL for Streamlit UI |
+| `FRAUD_PROBABILITY`       | `0.05`                                | Fraction of injected fraud events    |
+| `TRANSACTIONS_PER_SECOND` | `5.0`                                 | Generator throughput rate            |
 
 When running with Docker Compose these are automatically wired to the correct service hostnames.
 
@@ -202,14 +211,15 @@ The detector exposes a **Prometheus metrics endpoint** on port `8001`:
 | `fraud_caught_total`             | Counter   | Total transactions flagged as fraud |
 | `transaction_processing_seconds` | Histogram | Per-transaction processing latency  |
 
-### Access Dashboards
+### Access Dashboards & UIs
 
-| Tool        | URL                                                                       |
-| ----------- | ------------------------------------------------------------------------- |
-| Prometheus  | [http://localhost:9090](http://localhost:9090)                            |
-| Grafana     | [http://localhost:3000](http://localhost:3000) (default: `admin`/`admin`) |
-| ML API docs | [http://localhost:8000/docs](http://localhost:8000/docs)                  |
-| Raw Metrics | [http://localhost:8001/metrics](http://localhost:8001/metrics)            |
+| Tool            | URL                                                                       |
+| --------------- | ------------------------------------------------------------------------- |
+| FraudOps Portal | [http://localhost:8501](http://localhost:8501) (Streamlit live + batch)   |
+| Prometheus      | [http://localhost:9090](http://localhost:9090)                            |
+| Grafana         | [http://localhost:3000](http://localhost:3000) (default: `admin`/`admin`) |
+| ML API Docs     | [http://localhost:8000/docs](http://localhost:8000/docs) (Swagger UI)     |
+| Raw Metrics     | [http://localhost:8001/metrics](http://localhost:8001/metrics)            |
 
 To visualise fraud metrics in Grafana, add Prometheus as a data source (`http://prometheus:9090`) and create panels using the metrics above.
 
@@ -217,7 +227,7 @@ To visualise fraud metrics in Grafana, add Prometheus as a data source (`http://
 
 ## 🔌 ML Service API
 
-**`POST /predict`**
+### `POST /predict` — Real-Time Single Transaction
 
 ```json
 // Request
@@ -246,6 +256,29 @@ To visualise fraud metrics in Grafana, add Prometheus as a data source (`http://
 }
 ```
 
+### `POST /batch-analyze` — CSV Batch Analysis
+
+Accepts a multipart CSV upload with columns: `transaction_id`, `user_id`, `amount`, `location`. Looks up each user's profile from Redis, engineers features, runs XGBoost inference + SHAP, and returns annotated results.
+
+```json
+// Response
+{
+  "analyzed_transactions": [
+    {
+      "transaction_id": "txn_001",
+      "user_id": "usr_12",
+      "amount": 1200.0,
+      "location": "TX",
+      "is_fraud": true,
+      "fraud_probability": 0.9812,
+      "reasons": "Amount unusually high vs history., Location mismatch."
+    }
+  ]
+}
+```
+
+> Use the **FraudOps Portal** at `http://localhost:8501` for an interactive drag-and-drop batch analysis UI with a downloadable annotated report.
+
 Interactive API docs available at [`/docs`](http://localhost:8000/docs) (Swagger UI).
 
 ---
@@ -260,6 +293,7 @@ Interactive API docs available at [`/docs`](http://localhost:8000/docs) (Swagger
 | ML Model         | XGBoost 1.7.6                                        |
 | Explainability   | SHAP (TreeExplainer)                                 |
 | Inference API    | FastAPI + Uvicorn                                    |
+| Frontend         | Streamlit                                            |
 | Observability    | Prometheus + Grafana                                 |
 | Containerisation | Docker / Docker Compose                              |
 

@@ -1,0 +1,5 @@
+transaction_id,user_id,amount,location
+tx_01,usr_001,25.00,NY
+tx_02,usr_002,5000.00,INTERNATIONAL
+tx_03,usr_003,12.50,CA
+tx_04,usr_001,800.00,FL
