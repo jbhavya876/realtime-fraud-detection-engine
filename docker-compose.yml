@@ -34,21 +34,24 @@ services:
     environment:
       - REDIS_HOST=redis
 
-  # The Stream Processor: Fraud Detector
+  # The High-Performance Stream Processor (Rust)
   detector:
-    build: .
-    container_name: detector
-    command: python detector.py
+    build: 
+      context: .
+      dockerfile: Dockerfile.rust
+    container_name: rust-detector
     depends_on:
       - redpanda
       - redis
       - ml-service
     environment:
       - KAFKA_BROKER=redpanda:9092
+      - KAFKA_TOPIC=raw-transactions
       - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - ML_SERVICE_URL=http://ml-service:8000/predict
-    ports:
-      - "8001:8001" # Prometheus metrics
+    ports:                     
+      - "8001:8001"            
 
   # The Source: Transaction Generator
   generator:

@@ -1,0 +1,21 @@
+# Stage 1: Build using Debian Bookworm (Debian 12)
+FROM rust:1-bookworm as builder
+
+# Install cmake and build dependencies for rdkafka
+RUN apt-get update && apt-get install -y cmake build-essential
+
+WORKDIR /usr/src/app
+COPY rust-detector/ .
+RUN cargo build --release
+
+# Stage 2: Run using Debian Bookworm Slim
+FROM debian:bookworm-slim
+
+# Install SSL certificates and libssl (Bookworm uses libssl3)
+RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+# Copy the compiled binary from the builder stage
+COPY --from=builder /usr/src/app/target/release/rust-detector /app/rust-detector
+
+CMD ["./rust-detector"]

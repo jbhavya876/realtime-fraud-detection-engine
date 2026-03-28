@@ -1,5 +1,8 @@
 transaction_id,user_id,amount,location
-tx_01,usr_001,25.00,NY
-tx_02,usr_002,5000.00,INTERNATIONAL
-tx_03,usr_003,12.50,CA
-tx_04,usr_001,800.00,FL
+tx_batch_001,usr_005,15.99,NY
+tx_batch_002,usr_012,8500.00,INTERNATIONAL
+tx_batch_003,usr_022,42.50,CA
+tx_batch_004,usr_005,9999.00,INTERNATIONAL
+tx_batch_005,usr_031,112.00,TX
+tx_batch_006,usr_045,7500.00,FL
+tx_batch_007,usr_018,22.00,NY

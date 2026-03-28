@@ -1,0 +1,1 @@
+cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/home/jbhavya/realtime-fraud-engine/rust-detector/target/debug/build/mime_guess-9c4f92342c432218/out/mime_types_generated.rs
