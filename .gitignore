@@ -1,14 +1,26 @@
 # Python
 venv/
+.venv/
+env/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.so
+.pytest_cache/
+.coverage
+
+# Rust / Cargo
+target/
+**/*.rs.bk
 
 # ML artifacts
 fraud_model.pkl
 shap_explainer.pkl
+
+# Data Files & Reports
+*.csv
+*.dat
 
 # Env files
 .env
@@ -29,9 +41,10 @@ Thumbs.db
 *.tar
 docker-compose.override.yml
 
-# Redis
+# Databases & Brokers
 dump.rdb
 *.rdb
+redpanda_data/
 
 # Monitoring volumes
 prometheus_data/
