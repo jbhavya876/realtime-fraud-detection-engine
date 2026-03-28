@@ -19,17 +19,17 @@ jobs:
 
     - name: Verify Python Microservices Build (ML & Generator)
       run: |
-        docker-compose build ml-service
-        docker-compose build generator
-        docker-compose build frontend
+        docker compose build ml-service
+        docker compose build generator
+        docker compose build frontend
 
     - name: Verify Rust Stream Processor Build
       run: |
-        docker-compose build detector
+        docker compose build detector
 
     - name: Infrastructure Integration Test (Dry Run)
       run: |
-        docker-compose up -d
+        docker compose up -d
         sleep 15  # Wait for services to initialize
-        docker-compose ps
-        docker-compose down
+        docker compose ps
+        docker compose down
