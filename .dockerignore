@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+*.log
+*.log.*
+rust-detector/target/
+screenshots/
+.git/
+.gitignore
+*.md
+!README.md
+.hallmark/
+.DS_Store
+Thumbs.db

@@ -1,10 +1,11 @@
 import json
+import os
 from confluent_kafka import Consumer
 
-# --- Configuration ---
-KAFKA_TOPIC = "raw-transactions"
-KAFKA_BOOTSTRAP_SERVERS = "localhost:19092"
-GROUP_ID = "fraud-detector-v1" # Consumers with the same ID share the workload
+# --- Configuration (read from env vars with safe fallbacks) ---
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw-transactions")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BROKER", "localhost:19092")
+GROUP_ID = os.getenv("CONSUMER_GROUP_ID", "fraud-debug-consumer")  # Consumers with the same ID share the workload
 
 # Set up the Kafka Consumer
 consumer_conf = {

@@ -1,25 +1,67 @@
 import os
 import io
+import json
+import hashlib
 import redis
-from fastapi import UploadFile, File, HTTPException
+from fastapi import UploadFile, File, HTTPException, Request, Depends
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pickle
 import pandas as pd
 import numpy as np
 import shap
 
+# --- Security Config ---
+MAX_CSV_BYTES = 10 * 1024 * 1024  # 10 MB hard cap
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")  # Must be set in production
+
+# Allowed origins for CORS (set ML_SERVICE_CORS_ORIGINS env var in prod, comma-separated)
+_cors_origins_env = os.getenv("ML_SERVICE_CORS_ORIGINS", "")
+ALLOWED_ORIGINS = [o.strip() for o in _cors_origins_env.split(",") if o.strip()] or ["*"]
+
 app = FastAPI(title="Fraud Inference Engine")
+
+# --- CORS Middleware ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["POST", "GET"],
+    allow_headers=["*"],
+)
+
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
+def _require_internal_key(request: Request):
+    """Validate the internal API key for service-to-service calls."""
+    if INTERNAL_API_KEY:
+        provided = request.headers.get("X-Internal-Key", "")
+        if provided != INTERNAL_API_KEY:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
 # Load our pre-trained artifacts on startup
+# SEC-02: Verify model artifact integrity via SHA-256 before loading.
+# Set MODEL_SHA256 and EXPLAINER_SHA256 env vars in production to the
+# expected hex digests; if unset, the check is skipped (dev mode).
+def _verify_and_load(path: str, expected_sha256: str | None):
+    with open(path, 'rb') as f:
+        raw = f.read()
+    if expected_sha256:
+        actual = hashlib.sha256(raw).hexdigest()
+        if actual != expected_sha256:
+            raise RuntimeError(
+                f"Artifact integrity check failed for {path}. "
+                f"Expected {expected_sha256}, got {actual}. "
+                "Do not load — the file may have been tampered with."
+            )
+    return pickle.loads(raw)  # noqa: S301 — integrity verified above
+
 print("Loading Model and Explainer...")
-with open('fraud_model.pkl', 'rb') as f:
-    model = pickle.load(f)
-with open('shap_explainer.pkl', 'rb') as f:
-    explainer = pickle.load(f)
+model = _verify_and_load('fraud_model.pkl', os.getenv("MODEL_SHA256"))
+explainer = _verify_and_load('shap_explainer.pkl', os.getenv("EXPLAINER_SHA256"))
 print("Artifacts loaded.")
 
 # Define the expected input payload
@@ -30,7 +72,7 @@ class TransactionFeatures(BaseModel):
     is_international: int
 
 @app.post("/predict")
-def predict_fraud(features: TransactionFeatures):
+def predict_fraud(features: TransactionFeatures, _: None = Depends(_require_internal_key)):
     # 1. Prepare data for XGBoost
     df = pd.DataFrame([{
         'amount': features.amount,
@@ -88,11 +130,16 @@ def predict_fraud(features: TransactionFeatures):
 
 @app.post("/batch-analyze")
 async def analyze_csv(file: UploadFile = File(...)):
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
-    
-    # Read the uploaded CSV into a Pandas DataFrame
-    contents = await file.read()
+    # SEC-04: Validate MIME type, not just the filename extension.
+    if not file.content_type in ("text/csv", "application/csv", "text/plain"):
+        # Fallback: check filename as a secondary signal only
+        if not (file.filename or "").lower().endswith('.csv'):
+            raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+
+    # SEC-05: Enforce file size limit to prevent OOM from malicious uploads.
+    contents = await file.read(MAX_CSV_BYTES + 1)
+    if len(contents) > MAX_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="File too large. Maximum allowed size is 10 MB.")
     try:
         raw_df = pd.read_csv(io.StringIO(contents.decode('utf-8')))
     except Exception as e:
@@ -118,7 +165,6 @@ async def analyze_csv(file: UploadFile = File(...)):
             avg_amount = 50.0 
             base_location = location
         else:
-            import json
             profile = json.loads(profile_json)
             avg_amount = profile['avg_transaction_amount']
             base_location = profile['base_location']

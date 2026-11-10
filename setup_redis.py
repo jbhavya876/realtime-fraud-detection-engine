@@ -2,17 +2,26 @@ import redis
 import random
 import json
 import os
+import sys
 
 # --- Configuration with Env Var Fallbacks ---
 NUM_USERS = 50
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
+# Production guard: require an explicit flag to seed data
+FORCE_SEED = os.getenv("FORCE_SEED", "false").lower() == "true"
+
 # Connect to Redis
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
-print("Connected to Redis. Clearing old data...")
-r.flushall() # Clean slate for our simulation
+# Check if profiles already exist — avoid accidental overwrites
+existing = r.keys("user_profile:*")
+if existing and not FORCE_SEED:
+    print(f"⚠️  Found {len(existing)} existing user profiles in Redis.")
+    print("    Set FORCE_SEED=true to overwrite them.")
+    print("    Exiting without changes to protect production data.")
+    sys.exit(0)
 
 print(f"Generating profiles for {NUM_USERS} users...")
 
